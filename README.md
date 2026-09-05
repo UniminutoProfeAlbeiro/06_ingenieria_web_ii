@@ -1,4 +1,4 @@
-## FRONTEND: REACT + VITE
+##  <h1 align="center">FRONTEND: REACT + VITE</h1>
 
 ### 1. [ENTORNO DE DESARROLLO](resources/review/ejemplo_readme.md)
 #### 1.1. Configuración Inicial
@@ -8,4 +8,3 @@
 #### 1.1. Configuración Inicial
 #### 1.2. Iniciar el Proyecto
 ---
-
