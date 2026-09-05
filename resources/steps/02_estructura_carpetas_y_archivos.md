@@ -1,11 +1,4 @@
-# Punto 2 — Iniciar el Proyecto
-## Estructura de Carpetas y Archivos
-
-> Documentación técnica del proyecto **React + Vite + Node.js + Express**, organizada bajo una arquitectura MVC adaptada a React.
-
-## 📄 **PUNTO 2: INICIAR EL PROYECTO (Estructura de Carpetas y Archivos)**
-```markdown
-# Punto 2: Iniciar el Proyecto
+# Punto 2: Estructura de Carpetas y Archivos
 
 ## 📚 Explicación
 
@@ -19,10 +12,9 @@ Una vez configurado el entorno de desarrollo, el siguiente paso es **organizar l
 | **View** | Interfaz de usuario (componentes React) | `src/views/auth/LoginView.jsx` |
 | **Controller** | Lógica de negocio y coordinación | `src/controllers/AuthController.js` |
 
-### Estructura final de carpetas
+### Estructura de Carpetas y Archivos
 
-```
-
+```bash
 frontend\_web/
 └── react\_node\_express/
 ├── public/ # Archivos estáticos
@@ -85,14 +77,11 @@ frontend\_web/
 ├── package.json
 ├── README.md
 └── vite.config.js
-```text
 ---
 
 ## 📝 Paso a paso
 
 ### 1. Crear la estructura de carpetas
-
-Desde la raíz del proyecto (`frontend_web/react_node_express/`), crea las siguientes carpetas:
 
 ```bash
 # Crear todas las carpetas necesarias

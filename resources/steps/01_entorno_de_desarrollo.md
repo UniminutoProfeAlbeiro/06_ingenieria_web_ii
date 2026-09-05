@@ -156,7 +156,7 @@ npm install -D @vitejs/plugin-react@6.0.1 @eslint/js@9.39.4 eslint@9.39.4 eslint
 
 Abre `package.json` y confirma que tenga estas scripts y dependencias:
 
-```bash
+```json
 {
   "name": "sis-web-mvc",
   "private": true,
@@ -192,7 +192,7 @@ Abre `package.json` y confirma que tenga estas scripts y dependencias:
 
 Crea el archivo `vite.config.js` en la raíz del proyecto con este contenido:
 
-```bash
+```javascript
 // vite.config.js
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
@@ -222,7 +222,7 @@ export default defineConfig({
 
 El archivo `eslint.config.js` ya existe después de la instalación. Verifica que tenga este contenido:
 
-```bash
+```javascript
 import js from '@eslint/js'
 import globals from 'globals'
 import reactHooks from 'eslint-plugin-react-hooks'
@@ -269,7 +269,7 @@ export default defineConfig([
 
 Abre `index.html` y confirma que tenga este contenido:
 
-```bash
+```html
 <!DOCTYPE html>
 <html lang="es">
   <head>
@@ -297,7 +297,7 @@ Abre `index.html` y confirma que tenga este contenido:
 
 Modifica el archivo `src/main.jsx` con este contenido:
 
-```bash
+```jsx
 // src/main.jsx
 import React from 'react'
 import ReactDOM from 'react-dom/client'
@@ -315,7 +315,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
 
 Modifica el archivo `src/App.jsx` con este contenido base (lo ampliaremos después):
 
-```bash
+```jsx
 // src/App.jsx
 import './App.css'
 
