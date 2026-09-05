@@ -1,75 +1,10 @@
-# Punto 1: Configuración del Entorno de Desarrollo
+# Punto 1 — Configuración inicial del proyecto React con Vite
 
-> **Guía de implementación — React + Vite + Node.js + Express + JWT**
->
-> Documento estructurado y normalizado en formato Markdown.
-
----
-
-## 📚 Explicación
-
-Antes de empezar a codificar, necesitamos preparar nuestro entorno de trabajo. Este proyecto utiliza **React** con **Vite** como bundler, y se conecta a un **backend Node.js + Express** con autenticación JWT.
-
-### Tecnologías principales
-
-| Tecnología | Versión | Propósito |
-|---|---:|---|
-| ------------------------------ | ------ | -------------------------------------- |
-| **Node.js**                    | v18+   | Entorno de ejecución JavaScript        |
-| **Vite**                       | 8.0.4  | Bundler rápido para aplicaciones React |
-| **React**                      | 19.2.4 | Biblioteca para interfaces de usuario  |
-| **React Router DOM**           | 7.14.0 | Enrutamiento para SPA                  |
-| **JWT Decode**                 | 4.0.0  | Decodificación de tokens JWT           |
-| **ESLint**                     | 9.39.4 | Linter para calidad de código          |
-
-### Requisitos previos
-
-- ✅ Node.js instalado (v18+)
-- ✅ Editor de código (VS Code recomendado)
-- ✅ Conocimiento básico de terminal
-- ✅ Conexión a Internet
-
-### Estructura del proyecto al finalizar
-
-```
-frontend_web/
-└── react_node_express/
-    ├── node_modules/          # Dependencias del proyecto
-    ├── public/                # Archivos estáticos
-    │   └── vite.svg           # Favicon de Vite
-    ├── src/                   # Código fuente (lo crearemos después)
-    │   ├── App.css
-    │   ├── App.jsx
-    │   ├── index.css
-    │   └── main.jsx
-    ├── .gitignore             # Archivos ignorados por Git
-    ├── eslint.config.js       # Configuración de ESLint
-    ├── index.html             # Página principal HTML
-    ├── package-lock.json      # Versiones exactas de dependencias
-    ├── package.json           # Configuración del proyecto
-    ├── README.md              # Documentación
-    └── vite.config.js         # Configuración de Vite
-```
-
----
-
-## 📝 Paso a paso
-
-### 1. Verificar Node.js instalado
-
-Abre tu terminal (PowerShell, CMD o Bash) y ejecuta:
-
-```
-node --version
-# Debe mostrar v18.x.x o superior
-
-npm --version
-# Debe mostrar v9.x.x o superior
-```
-
-**Si no tienes Node.js:** Descárgalo desde [https://nodejs.org/](https://nodejs.org/)
+> Documento convertido y normalizado a formato Markdown (`.md`).
 
 ### 2. Crear la carpeta del proyecto
+
+bash
 
 ```
 # Crear la estructura de carpetas
@@ -86,6 +21,8 @@ cd frontend_web/react_node_express
 
 ### 3. Inicializar el proyecto con Vite
 
+bash
+
 ```
 npm create vite@latest . -- --template react
 ```
@@ -100,6 +37,8 @@ npm create vite@latest . -- --template react
 
 Cuando aparezca el prompt, selecciona **ESLint**:
 
+text
+
 ```
 ◆  Which linter to use?
 │  ● Oxlint       ← Opción por defecto
@@ -109,8 +48,7 @@ Cuando aparezca el prompt, selecciona **ESLint**:
 
 **¿Por qué ESLint y no Oxlint?**
 
-| Característica | ESLint | Oxlint |
-|---|---|---|
+| **CaracterísticaESLintOxlint** |                          |                                 |
 | ------------------------------ | ------------------------ | ------------------------------- |
 | Madurez                        | ✅ Maduro (2013)          | ❌ Nuevo (2024)                  |
 | Plugins                        | ✅ Miles disponibles      | ❌ Limitados                     |
@@ -119,6 +57,8 @@ Cuando aparezca el prompt, selecciona **ESLint**:
 | **Educativo**                  | ✅ Estándar industrial    | ❌ No recomendado para enseñanza |
 
 ### 4. Instalar dependencias base
+
+bash
 
 ```
 npm install
@@ -130,11 +70,15 @@ Este comando instala todas las dependencias que Vite configuró automáticamente
 
 **Dependencias de producción (necesarias para la aplicación):**
 
+bash
+
 ```
 npm install react@19.2.4 react-dom@19.2.4 react-router-dom@7.14.0 jwt-decode@4.0.0
 ```
 
 **Dependencias de desarrollo (solo para desarrollo):**
+
+bash
 
 ```
 npm install -D @vitejs/plugin-react@6.0.1 @eslint/js@9.39.4 eslint@9.39.4 eslint-plugin-react-hooks@7.0.1 eslint-plugin-react-refresh@0.5.2 globals@17.4.0 @types/react@19.2.14 @types/react-dom@19.2.3 vite@8.0.4
@@ -142,8 +86,7 @@ npm install -D @vitejs/plugin-react@6.0.1 @eslint/js@9.39.4 eslint@9.39.4 eslint
 
 **📦 Resumen de dependencias con versiones exactas:**
 
-| Paquete | Versión | Tipo | Propósito |
-|---|---:|---|---|
+| **PaqueteVersiónTipoPropósito** |         |      |                                    |
 | ------------------------------- | ------- | ---- | ---------------------------------- |
 | **Dependencias de producción**  |         |      |                                    |
 | react                           | 19.2.4  | prod | Biblioteca principal de React      |
@@ -164,6 +107,8 @@ npm install -D @vitejs/plugin-react@6.0.1 @eslint/js@9.39.4 eslint@9.39.4 eslint
 ### 6. Verificar el archivo package.json
 
 Abre `package.json` y confirma que tenga estas scripts y dependencias:
+
+json
 
 ```
 {
@@ -201,6 +146,8 @@ Abre `package.json` y confirma que tenga estas scripts y dependencias:
 
 Crea el archivo `vite.config.js` en la raíz del proyecto con este contenido:
 
+javascript
+
 ```
 // vite.config.js
 import { defineConfig } from 'vite'
@@ -220,8 +167,7 @@ export default defineConfig({
 
 **Explicación de la configuración:**
 
-| Propiedad | Valor | Explicación |
-|---|---|---|
+| **PropiedadValorExplicación** |             |                                        |
 | ----------------------------- | ----------- | -------------------------------------- |
 | `plugins`                     | `[react()]` | Habilita el soporte de React en Vite   |
 | `server.port`                 | `5173`      | Puerto donde corre la aplicación       |
@@ -231,6 +177,8 @@ export default defineConfig({
 ### 8. Configurar ESLint (eslint.config.js)
 
 El archivo `eslint.config.js` ya existe después de la instalación. Verifica que tenga este contenido:
+
+javascript
 
 ```
 import js from '@eslint/js'
@@ -266,8 +214,7 @@ export default defineConfig([
 
 **Explicación de la configuración ESLint:**
 
-| Sección | Función |
-|---|---|
+| **SecciónFunción**         |                                        |
 | -------------------------- | -------------------------------------- |
 | `globalIgnores(['dist'])`  | Ignora la carpeta de build             |
 | `files: ['**/*.{js,jsx}']` | Aplica a archivos .js y .jsx           |
@@ -279,6 +226,8 @@ export default defineConfig([
 ### 9. Verificar/Actualizar index.html
 
 Abre `index.html` y confirma que tenga este contenido:
+
+html
 
 ```
 <!DOCTYPE html>
@@ -308,6 +257,8 @@ Abre `index.html` y confirma que tenga este contenido:
 
 Modifica el archivo `src/main.jsx` con este contenido:
 
+jsx
+
 ```
 // src/main.jsx
 import React from 'react'
@@ -325,6 +276,8 @@ ReactDOM.createRoot(document.getElementById('root')).render(
 ### 11. Actualizar src/App.jsx
 
 Modifica el archivo `src/App.jsx` con este contenido base (lo ampliaremos después):
+
+jsx
 
 ```
 // src/App.jsx
@@ -345,6 +298,8 @@ export default App
 ### 12. Verificar estructura de carpetas
 
 Al finalizar este punto, tu estructura debe verse así:
+
+text
 
 ```
 frontend_web/
@@ -374,11 +329,15 @@ Para probar que todo está correctamente configurado:
 
 ### 1. Iniciar el servidor de desarrollo
 
+bash
+
 ```
 npm run dev
 ```
 
 ### 2. Resultado esperado en la terminal
+
+text
 
 ```
 VITE v8.0.4  ready in 500 ms
@@ -404,6 +363,8 @@ VITE v8.0.4  ready in 500 ms
 
 **Solución:** Actualiza Node.js a v18 o superior
 
+bash
+
 ```
 # Verificar versión
 node --version
@@ -417,6 +378,8 @@ node --version
 **Problema:** Las dependencias no se instalaron correctamente
 
 **Solución:** Reinstala las dependencias
+
+bash
 
 ```
 # En Windows:
@@ -436,6 +399,8 @@ npm install
 
 **Solución:** Asegúrate de usar `export default` y la sintaxis moderna
 
+javascript
+
 ```
 // ✅ Correcto (ES Modules)
 export default defineConfig([...])
@@ -450,6 +415,8 @@ module.exports = defineConfig([...])
 
 **Solución 1:** Cambia el puerto en `vite.config.js`:
 
+javascript
+
 ```
 server: {
   port: 5174,  // Cambia a otro puerto
@@ -458,6 +425,8 @@ server: {
 ```
 
 **Solución 2:** Encontrar y cerrar el proceso que usa el puerto
+
+bash
 
 ```
 # En Windows (PowerShell):
@@ -474,6 +443,8 @@ kill -9 <PID>
 **Problema:** Conflictos de versiones entre paquetes
 
 **Solución:** Instala sin versiones exactas primero
+
+bash
 
 ```
 npm install react react-dom react-router-dom jwt-decode
@@ -496,22 +467,48 @@ npm install -D @vitejs/plugin-react eslint
 
 Marca cada elemento cuando esté completado:
 
-- [ ] Node.js v18+ instalado y verificado
-- [ ] Proyecto creado con `npm create vite@latest`
-- [ ] ESLint seleccionado como linter
-- [ ] Dependencias de producción instaladas
-- [ ] Dependencias de desarrollo instaladas
-- [ ] `vite.config.js` configurado correctamente
-- [ ] `eslint.config.js` verificado
-- [ ] `index.html` actualizado con lang="es" y meta tags
-- [ ] `main.jsx` verificado
-- [ ] `App.jsx` actualizado
-- [ ] `npm run dev` funciona correctamente
-- [ ] Aplicación visible en `http://localhost:5173`
+- □ 
+
+  Node.js v18+ instalado y verificado
+- □ 
+
+  Proyecto creado con `npm create vite@latest`
+- □ 
+
+  ESLint seleccionado como linter
+- □ 
+
+  Dependencias de producción instaladas
+- □ 
+
+  Dependencias de desarrollo instaladas
+- □ 
+
+  `vite.config.js` configurado correctamente
+- □ 
+
+  `eslint.config.js` verificado
+- □ 
+
+  `index.html` actualizado con lang="es" y meta tags
+- □ 
+
+  `main.jsx` verificado
+- □ 
+
+  `App.jsx` actualizado
+- □ 
+
+  `npm run dev` funciona correctamente
+- □ 
+
+  Aplicación visible en `http://localhost:5173`
 
 ---
 
 ## 📝 Resumen de comandos (cheatsheet)
+
+bash
 
 ```
 # 1. Verificar Node.js
