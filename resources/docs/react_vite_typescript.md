@@ -16,7 +16,7 @@ Su frontend actual está diseñado para JSON Server, lo que implica:
 
 **Conclusión clave:** El backend real hace hashing de contraseñas con bcrypt, valida con JWT firmado y devuelve respuestas envueltas en `{success, message, data}`. Todo esto debe reflejarse en el frontend.
 
-### 🎯 PASO 1: src/config/api.js
+## 🎯 PASO 1: src/config/api.js
 
 Este es el archivo más profundo que define cómo se comunican todas las capas superiores con el backend. Es la base de todo. Cambiamos:
 - La BASE_URL para apuntar al backend Express (con /api como prefijo de las rutas)
@@ -62,7 +62,7 @@ Por favor:
 2. Levante el backend Express en 192.168.78.145:3000 (o ajuste la IP a la que use en su salón de clases).
 3. Pruebe con la app corriendo — el login fallará (esperado, aún no modificamos AuthModel), pero en la consola del navegador debería ver que las peticiones ya van hacia /api/users/... y no hacia /users.
 
-# 🎯 PASO 2: src/services/jwtService.js
+## 🎯 PASO 2: src/services/jwtService.js
 
 ## ¿Por qué este archivo es el siguiente?
 
