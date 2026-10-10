@@ -1316,3 +1316,1846 @@ Por favor:
 * `403` en `GET /api/users` → el usuario no tiene rol `admin`/`seller`.
 * `500` en `POST /api/users/create` → puede faltar algún campo `NOT NULL` en MySQL (`name`, `lastname`, etc.) o fallar el hash de bcrypt.
 * `401` en cualquier petición → token expirado o inválido; cerrar sesión y volver a entrar.
+
+
+# 🎯 PASO 7: src/views/dashboard/UserForm.jsx
+
+## ¿Por qué este archivo ahora?
+Este es el formulario de creación/edición de usuarios. Ya tenemos UserModel con los métodos correctos, pero UserForm todavía tiene lógica heredada de la era JSON Server que puede causar problemas al probar el CRUD:
+
+## 🔴 Problemas del código actual
+
+### Problema 1: En modo PATCH envía password en texto plano sin advertencia
+En el modo PATCH, el usuario selecciona "email" o "password". Si elige password, se envía como `{ password: "nuevoValor" }` al backend. Eso está bien (el backend hashea), pero el `<input type="text">` para password no oculta el valor.
+
+```jsx
+<input  
+  type={patchField === 'email' ? 'email' : 'text'}  // ❌ password en texto plano  
+  value={patchValue}  
+  ...
+/>
+```
+
+### Problema 2: updateUser en modo PUT envía user.password como fallback
+```jsx
+const updateData = {  
+  email: formData.email,  
+  password: formData.password || user.password  // ❌ envía el hash como "password"
+}
+```
+Aquí hay un bug lógico grave: `user.password` en el frontend nunca debería existir (el backend nunca lo devuelve en el GET). Pero el código lo usa como fallback. Si el backend por error devolviera el hash, se re-hashearía el hash → contraseña rota. Eliminar ese fallback.
+
+### Problema 3: El UserForm no acepta los campos name, lastname, phone
+Su backend requiere (o al menos recomienda) name en el registro. Pero UserForm solo maneja email y password. Cuando el usuario crea un nuevo usuario desde el dashboard, el name va vacío (`''`). Puede causar problemas si MySQL tiene NOT NULL en name.
+
+*Decisión para la clase:* Agregar los campos name, lastname y phone al formulario. Es más completo y didáctico.
+
+### Problema 4: No hay validación de formato de email ni longitud de contraseña
+El backend lo valida con bcrypt y MySQL, pero es mejor UX validar antes de enviar.
+
+### Problema 5: El modo PATCH usa type="text" para contraseña
+Cuando el campo es password en modo PATCH, debe usar `type="password"` para ocultar visualmente el valor.
+
+---
+
+## 🎯 ¿Qué cambios hago?
+Voy a:
+1. Agregar campos `name`, `lastname`, `phone` al formulario (alineados con el backend).
+2. Corregir el fallback `user.password` en modo PUT — simplemente no enviar password si está vacío.
+3. Corregir el type del input en modo PATCH para que password use `type="password"`.
+4. Validar email y longitud de contraseña en el cliente antes de enviar.
+5. Mantener el flujo PUT/PATCH tal como está, pero con las correcciones anteriores.
+6. Mejorar los mensajes de error: mostrar el mensaje del backend tal cual (ya lo hace `setError(err.error || ...)` pero hay que asegurar que se propague).
+
+---
+
+## ⚠️ Un detalle sobre PUT y campos obligatorios
+Recuerde que en su backend, `User.update` construye el SQL dinámicamente:
+
+```js
+if (user.name) { fields.push("name = ?"); values.push(user.name); }
+if (user.email) { fields.push("email = ?"); values.push(user.email); }
+// etc.
+```
+
+Eso significa que un PUT con solo `{ email: "nuevo@email.com" }` es válido — solo actualiza email. Perfecto para nuestros propósitos.
+
+Pero en modo PUT puro del formulario, enviamos todos los campos visibles. Aquí está el dilema didáctico:
+- **PUT semánticamente correcto:** enviar TODOS los campos (nombre, email, teléfono, etc.).
+- **PUT pragmático con backend flexible:** enviar solo los campos que el usuario tocó.
+
+Voy con **PUT pragmático**: enviamos los campos presentes pero solo los que tengan valor (o explícitamente vacíos si el usuario los vació). El backend actualiza lo que recibe.
+
+
+## Archivo completo a reemplazar:
+
+
+```js
+// src/views/dashboard/UserForm.jsx
+import { useState, useEffect } from 'react'
+import useUsers from '../../hooks/useUsers'
+
+const UserForm = ({ user, isEdit, onSuccess, onClose }) => {
+  const { createUser, updateUser, patchUser } = useUsers()
+
+  const [formData, setFormData] = useState({
+    name: '',
+    lastname: '',
+    email: '',
+    phone: '',
+    password: '',
+    confirmPassword: ''
+  })
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+
+  // Modo PATCH
+  const [patchMode, setPatchMode] = useState(false)
+  const [patchField, setPatchField] = useState('')
+  const [patchValue, setPatchValue] = useState('')
+
+  // Cargar datos del usuario en modo edición
+  useEffect(() => {
+    if (user && isEdit) {
+      setFormData({
+        name: user.name || '',
+        lastname: user.lastname || '',
+        email: user.email || '',
+        phone: user.phone || '',
+        password: '',
+        confirmPassword: ''
+      })
+    }
+  }, [user, isEdit])
+
+  const handleChange = (e) => {
+    const { name, value } = e.target
+    setFormData(prev => ({ ...prev, [name]: value }))
+    if (error) setError('')
+  }
+
+  // Validación reutilizable
+  const validateEmail = (email) => {
+    const re = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+    return re.test(email)
+  }
+
+  // ============ MODO POST (crear) y PUT (actualizar completo) ============
+  const handleSubmit = async (e) => {
+    e.preventDefault()
+    setError('')
+
+    // Validaciones comunes
+    if (!formData.email) {
+      setError('El email es requerido')
+      return
+    }
+    if (!validateEmail(formData.email)) {
+      setError('Por favor ingrese un email válido')
+      return
+    }
+    if (!formData.name || !formData.name.trim()) {
+      setError('El nombre es requerido')
+      return
+    }
+
+    // Validaciones específicas para creación
+    if (!isEdit) {
+      if (!formData.password) {
+        setError('La contraseña es requerida')
+        return
+      }
+      if (formData.password.length < 6) {
+        setError('La contraseña debe tener al menos 6 caracteres')
+        return
+      }
+      if (formData.password !== formData.confirmPassword) {
+        setError('Las contraseñas no coinciden')
+        return
+      }
+    }
+
+    // Validación de contraseña en edición (solo si se ingresó algo)
+    if (isEdit && formData.password) {
+      if (formData.password.length < 6) {
+        setError('La contraseña debe tener al menos 6 caracteres')
+        return
+      }
+      if (formData.password !== formData.confirmPassword) {
+        setError('Las contraseñas no coinciden')
+        return
+      }
+    }
+
+    setLoading(true)
+
+    try {
+      if (isEdit) {
+        // PUT - Actualizar campos enviados
+        const updateData = {
+          name: formData.name,
+          lastname: formData.lastname,
+          email: formData.email,
+          phone: formData.phone || null
+        }
+        // Solo enviamos password si el usuario escribió una nueva
+        if (formData.password) {
+          updateData.password = formData.password
+        }
+
+        await updateUser(user.id, updateData)
+      } else {
+        // POST - Crear nuevo usuario
+        await createUser({
+          name: formData.name,
+          lastname: formData.lastname,
+          email: formData.email,
+          phone: formData.phone || null,
+          password: formData.password
+        })
+      }
+      onSuccess()
+    } catch (err) {
+      setError(err.error || 'Error al guardar usuario')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // ============ MODO PATCH (actualizar un solo campo) ============
+  const handlePatchSubmit = async (e) => {
+    e.preventDefault()
+    setError('')
+
+    if (!patchField) {
+      setError('Seleccione un campo a actualizar')
+      return
+    }
+    if (!patchValue) {
+      setError('Ingrese el nuevo valor')
+      return
+    }
+
+    // Validación específica por campo
+    if (patchField === 'email' && !validateEmail(patchValue)) {
+      setError('Por favor ingrese un email válido')
+      return
+    }
+    if (patchField === 'password' && patchValue.length < 6) {
+      setError('La contraseña debe tener al menos 6 caracteres')
+      return
+    }
+
+    setLoading(true)
+    try {
+      const patchData = {}
+      patchData[patchField] = patchValue
+      await patchUser(user.id, patchData)
+      onSuccess()
+    } catch (err) {
+      setError(err.error || 'Error al actualizar campo')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // Determinar el type del input en modo PATCH
+  const getPatchInputType = () => {
+    if (patchField === 'email') return 'email'
+    if (patchField === 'password') return 'password'
+    return 'text'
+  }
+
+  // Placeholder para modo PATCH según campo
+  const getPatchPlaceholder = () => {
+    const placeholders = {
+      email: 'nuevo@email.com',
+      password: 'Nueva contraseña (mín. 6 caracteres)',
+      name: 'Nuevo nombre',
+      lastname: 'Nuevo apellido',
+      phone: 'Nuevo teléfono'
+    }
+    return placeholders[patchField] || 'Nuevo valor'
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <h3>{isEdit ? 'Editar Usuario' : 'Nuevo Usuario'}</h3>
+          <button className="modal-close" onClick={onClose}>×</button>
+        </div>
+
+        {error && <div className="form-error">{error}</div>}
+
+        {isEdit && (
+          <div className="patch-toggle">
+            <label>
+              <input
+                type="radio"
+                checked={!patchMode}
+                onChange={() => setPatchMode(false)}
+              />
+              Actualizar todos los datos (PUT)
+            </label>
+            <label>
+              <input
+                type="radio"
+                checked={patchMode}
+                onChange={() => setPatchMode(true)}
+              />
+              Actualizar campo específico (PATCH)
+            </label>
+          </div>
+        )}
+
+        {patchMode && isEdit ? (
+          // ============ FORM PATCH ============
+          <form onSubmit={handlePatchSubmit} className="user-form">
+            <div className="form-group">
+              <label>Campo a actualizar</label>
+              <select
+                value={patchField}
+                onChange={(e) => setPatchField(e.target.value)}
+                className="form-control"
+                required
+              >
+                <option value="">Seleccionar campo</option>
+                <option value="name">Nombre</option>
+                <option value="lastname">Apellido</option>
+                <option value="email">Email</option>
+                <option value="phone">Teléfono</option>
+                <option value="password">Contraseña</option>
+              </select>
+            </div>
+
+            <div className="form-group">
+              <label>Nuevo valor</label>
+              <input
+                type={getPatchInputType()}
+                value={patchValue}
+                onChange={(e) => setPatchValue(e.target.value)}
+                placeholder={getPatchPlaceholder()}
+                className="form-control"
+                required
+              />
+            </div>
+
+            <div className="form-actions">
+              <button type="submit" className="btn-primary" disabled={loading}>
+                {loading ? 'Actualizando...' : 'Actualizar Campo'}
+              </button>
+              <button type="button" className="btn-secondary" onClick={onClose}>
+                Cancelar
+              </button>
+            </div>
+          </form>
+        ) : (
+          // ============ FORM POST / PUT ============
+          <form onSubmit={handleSubmit} className="user-form">
+            <div className="form-group">
+              <label>Nombre *</label>
+              <input
+                type="text"
+                name="name"
+                value={formData.name}
+                onChange={handleChange}
+                placeholder="Nombre del usuario"
+                className="form-control"
+                disabled={loading}
+                required
+              />
+            </div>
+
+            <div className="form-group">
+              <label>Apellido</label>
+              <input
+                type="text"
+                name="lastname"
+                value={formData.lastname}
+                onChange={handleChange}
+                placeholder="Apellido del usuario"
+                className="form-control"
+                disabled={loading}
+              />
+            </div>
+
+            <div className="form-group">
+              <label>Email *</label>
+              <input
+                type="email"
+                name="email"
+                value={formData.email}
+                onChange={handleChange}
+                placeholder="usuario@ejemplo.com"
+                className="form-control"
+                required
+                disabled={loading}
+              />
+            </div>
+
+            <div className="form-group">
+              <label>Teléfono</label>
+              <input
+                type="text"
+                name="phone"
+                value={formData.phone}
+                onChange={handleChange}
+                placeholder="+57 300 000 0000"
+                className="form-control"
+                disabled={loading}
+              />
+            </div>
+
+            {!isEdit && (
+              <>
+                <div className="form-group">
+                  <label>Contraseña *</label>
+                  <input
+                    type="password"
+                    name="password"
+                    value={formData.password}
+                    onChange={handleChange}
+                    placeholder="Mínimo 6 caracteres"
+                    className="form-control"
+                    required
+                    disabled={loading}
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label>Confirmar Contraseña *</label>
+                  <input
+                    type="password"
+                    name="confirmPassword"
+                    value={formData.confirmPassword}
+                    onChange={handleChange}
+                    placeholder="Repita la contraseña"
+                    className="form-control"
+                    required
+                    disabled={loading}
+                  />
+                </div>
+              </>
+            )}
+
+            {isEdit && !patchMode && (
+              <>
+                <div className="form-group">
+                  <label>Nueva Contraseña (opcional)</label>
+                  <input
+                    type="password"
+                    name="password"
+                    value={formData.password}
+                    onChange={handleChange}
+                    placeholder="Dejar en blanco para mantener la actual"
+                    className="form-control"
+                    disabled={loading}
+                  />
+                </div>
+                {formData.password && (
+                  <div className="form-group">
+                    <label>Confirmar Nueva Contraseña</label>
+                    <input
+                      type="password"
+                      name="confirmPassword"
+                      value={formData.confirmPassword}
+                      onChange={handleChange}
+                      placeholder="Repita la nueva contraseña"
+                      className="form-control"
+                      disabled={loading}
+                    />
+                  </div>
+                )}
+              </>
+            )}
+
+            <div className="form-actions">
+              <button type="submit" className="btn-primary" disabled={loading}>
+                {loading ? 'Guardando...' : (isEdit ? 'Actualizar' : 'Crear')}
+              </button>
+              <button type="button" className="btn-secondary" onClick={onClose}>
+                Cancelar
+              </button>
+            </div>
+          </form>
+        )}
+      </div>
+    </div>
+  )
+}
+
+export default UserForm
+```
+
+# 📌 Notas didácticas clave para su clase
+
+1. El bug del fallback `user.password`: en el código original había `password: formData.password || user.password`. Aquí hay una lección de seguridad importante. El frontend nunca debe tener ni manejar el hash de la contraseña. En el `getUserById` del backend, su `SELECT` no incluye password, y eso es correcto. Eliminamos el fallback y ahora solo enviamos password si el usuario escribe una nueva.
+2. Separación de validaciones por contexto: mire las validaciones en `handleSubmit`. Hay tres bloques:
+  - Comunes: email válido, nombre no vacío.
+  - Solo creación (`!isEdit`): contraseña obligatoria + confirmación.
+  - Solo edición con password nueva: si el usuario dejó el campo vacío, no se valida; si escribió algo, se valida.
+3. Esto enseña que la misma operación (guardar) tiene reglas distintas según el contexto. Es una lección sobre UX y reglas de negocio.
+4. Modo PATCH real y funcional: ahora el usuario puede elegir entre 5 campos (`name`, `lastname`, `email`, `phone`, `password`) y solo se envía ese campo al backend. Su `User.update` construye un `UPDATE` dinámico, así que funciona perfecto.
+5. `type="password"` condicional: fíjese en `getPatchInputType()`. Antes el input para password era `type="text"` (¡visible!). Ahora es `type="password"`. Detalle pequeño, pero didáctico: los detalles de seguridad importan.
+6. `formData.phone || null`: cuando el usuario deja el teléfono vacío, enviamos `null` en lugar de `""`. Esto es semánticamente más correcto para la base de datos (un teléfono vacío se representa mejor como `NULL` que como string vacío).
+7. Confirmación de contraseña condicional en edición: en modo PUT, si el usuario no escribe nueva contraseña, no mostramos el campo de confirmación. Si la escribe, aparece. Es UX adaptativo.
+
+## 🚨 Advertencia sobre `user.name` y `user.lastname`
+En el `UserModel.getAllUsers` de su backend, el `SELECT` incluye:
+```sql
+SELECT id, email, name, lastname, phone, image, role, created_at, updated_at FROM users
+```
+Perfecto. Ahora `UserForm` al editar puede poblar `name`, `lastname`, `phone` desde los datos del usuario. ✅
+
+## 🚨 Advertencia sobre `UsersView`
+Su `UsersView.jsx` no muestra los campos `name`, `lastname` en la tabla, solo `id`, `email`, `createdAt`. Los usuarios creados desde el dashboard aparecerán sin nombre visible en la tabla. Eso lo mejoraremos en el PASO 8 (opcional) si el tiempo lo permite.
+
+## ✅ Antes de continuar
+Por favor:
+1. Reemplace `src/views/dashboard/UserForm.jsx` con el contenido de arriba.
+2. Pruebe el flujo completo del dashboard:
+  - Crear usuario con nombre, apellido, email, teléfono y contraseña → verifique en MySQL que se guardó con bcrypt:
+  ```sql
+  SELECT id, name, lastname, email, role, LEFT(password, 20) FROM users ORDER BY id DESC LIMIT 1;
+  ```
+  - El campo password debe empezar con `$2a$` o `$2b$` (bcrypt).
+  - Editar (PUT): cambie el nombre o el teléfono, deje la contraseña vacía → verifique que el resto de campos no cambió.
+  - Editar (PUT con cambio de contraseña): escriba una nueva contraseña → verifique que ahora puede hacer login con ella.
+  - Editar (PATCH): cambie solo el teléfono → verifique que en MySQL solo cambió el teléfono y `updated_at`.
+  - Eliminar → verifique que desaparece de MySQL.
+
+### Errores esperados y su significado:
+- `"El email ya está registrado"` — no es un error de tu código, es correcto (tu backend no lo valida por defecto, pero si lo agregas, es buena práctica). Aquí en el frontend no lo validamos, así que el error vendría de MySQL como `ER_DUP_ENTRY`. Si quiere, en un paso extra lo agregamos al backend.
+- `500 al crear` — probablemente falte algún campo `NOT NULL` en MySQL (`lastname` si está definido como `NOT NULL`). Verifique el esquema de la tabla.
+
+# 🎯 PASO 8: src/views/dashboard/UsersView.jsx
+
+## ¿Por qué este archivo ahora?
+Este es el listado principal de usuarios en el dashboard. La tabla actual solo muestra ID, Email y Fecha Registro, pero su backend ahora devuelve muchos más campos (`name`, `lastname`, `phone`, `role`, `image`, etc.). Aprovechémoslos para hacer la tabla más informativa y didáctica.
+
+## 🔴 Problemas del código actual
+
+### Problema 1: La tabla solo muestra 4 columnas pobres
+```jsx
+<tr>  <th>ID</th>  <th>Email</th>  <th>Fecha Registro</th>  <th>Acciones</th></tr>
+```
+
+Con el backend, el `getAllUsers` devuelve:
+```json
+{  "id": 1,  "email": "oliver@stone.com",  "name": "Oliver",  "lastname": "Stone",  "phone": "3001234567",  "image": null,  "role": "admin",  "created_at": "2024-01-15T10:30:00.000Z",  "updated_at": "2024-01-15T10:30:00.000Z"}
+```
+
+Tenemos mucha información que no se muestra. Enseñar a sus estudiantes a aprovechar los datos del backend es una lección importante.
+
+### Problema 2: La búsqueda solo filtra por email e ID
+```jsx
+user.email.toLowerCase().includes(searchTerm.toLowerCase()) ||user.id.toString().includes(searchTerm)
+```
+
+Debería poder buscar por nombre completo y por rol también. Es más útil.
+
+### Problema 3: El campo `createdAt` no existe — es `created_at`
+```jsx
+<td>{user.createdAt ? new Date(user.createdAt).toLocaleDateString() : 'N/A'}</td>
+```
+
+Su backend MySQL devuelve `created_at` (snake_case). El código actual espera `createdAt` (camelCase). Nunca mostrará la fecha correctamente. Este es un bug silencioso heredado de JSON Server, donde los nombres pueden variar.
+
+### Problema 4: No se muestra el `role` con estilo
+El `role` es un dato clave (`admin`/`seller`/`customer`/`user`). Vale la pena mostrarlo con un badge de color para hacerlo visual.
+
+### Problema 5: La tabla tiene `colSpan="4"` — debe actualizarse
+Si agregamos columnas, ese `colSpan` debe reflejar el nuevo total.
+
+---
+
+## 🎯 ¿Qué cambios hago?
+1. Agregar columnas: Nombre completo, Email, Teléfono, Rol (con badge), Fecha de registro.
+2. Corregir `createdAt` → `created_at`.
+3. Ampliar la búsqueda: nombre, apellido, email, rol.
+4. Añadir badges de color por rol: `admin` (rojo), `seller` (naranja), `customer` (azul), `user` (gris).
+5. Reducir el ID a un badge pequeño — menos prominente, ya que la info clave es el nombre y el email.
+6. Mejorar el estado vacío con un mensaje contextual (dependiendo de si es por búsqueda o por falta de datos).
+
+## ⚠️ Decisión sobre `image`
+El campo `image` del backend puede ser una URL o `null`. Podría mostrar una imagen, pero eso complica el archivo por ahora. Lo dejamos para un paso opcional posterior — la clase avanza mejor si mantenemos el foco en lo esencial.
+
+**Archivo completo a reemplazar:**
+
+```jsx
+// src/views/dashboard/UsersView.jsx
+import { useState } from 'react'
+import useUsers from '../../hooks/useUsers'
+import AlertMessage from '../common/AlertMessage'
+import UserForm from './UserForm'
+import UserDetails from './UserDetails'
+import '../../styles/Users.css'
+
+const UsersView = () => {
+  const { users, loading, error, deleteUser, loadUsers } = useUsers()
+  const [showForm, setShowForm] = useState(false)
+  const [showDetails, setShowDetails] = useState(false)
+  const [selectedUser, setSelectedUser] = useState(null)
+  const [editMode, setEditMode] = useState(false)
+  const [message, setMessage] = useState(null)
+  const [searchTerm, setSearchTerm] = useState('')
+
+  // Filtrar usuarios: nombre, apellido, email, rol o ID
+  const filteredUsers = users.filter(user => {
+    const term = searchTerm.toLowerCase().trim()
+    if (!term) return true
+
+    const fullName = `${user.name || ''} ${user.lastname || ''}`.toLowerCase()
+    return (
+      fullName.includes(term) ||
+      (user.email || '').toLowerCase().includes(term) ||
+      (user.role || '').toLowerCase().includes(term) ||
+      user.id.toString().includes(term)
+    )
+  })
+
+  // Manejar eliminación
+  const handleDelete = async (user) => {
+    if (window.confirm(`¿Estás seguro de eliminar al usuario ${user.email}?`)) {
+      try {
+        await deleteUser(user.id)
+        setMessage({ type: 'success', text: 'Usuario eliminado exitosamente' })
+        setTimeout(() => setMessage(null), 3000)
+      } catch (err) {
+        setMessage({ type: 'error', text: err.error || 'Error al eliminar usuario' })
+      }
+    }
+  }
+
+  // Manejar edición
+  const handleEdit = (user) => {
+    setSelectedUser(user)
+    setEditMode(true)
+    setShowForm(true)
+    setShowDetails(false)
+  }
+
+  // Manejar ver detalles
+  const handleViewDetails = (user) => {
+    setSelectedUser(user)
+    setShowDetails(true)
+    setShowForm(false)
+    setEditMode(false)
+  }
+
+  // Manejar éxito del formulario
+  const handleFormSuccess = () => {
+    setShowForm(false)
+    setEditMode(false)
+    setSelectedUser(null)
+    loadUsers()
+    setMessage({ type: 'success', text: 'Operación completada exitosamente' })
+    setTimeout(() => setMessage(null), 3000)
+  }
+
+  const handleCloseForm = () => {
+    setShowForm(false)
+    setEditMode(false)
+    setSelectedUser(null)
+  }
+
+  const handleCloseDetails = () => {
+    setShowDetails(false)
+    setSelectedUser(null)
+  }
+
+  // Renderizar badge según rol
+  const getRoleBadge = (role) => {
+    const colors = {
+      admin: { bg: '#fee2e2', color: '#dc2626', label: 'Admin' },
+      seller: { bg: '#fed7aa', color: '#ea580c', label: 'Seller' },
+      customer: { bg: '#dbeafe', color: '#2563eb', label: 'Customer' },
+      user: { bg: '#e5e7eb', color: '#6b7280', label: 'User' }
+    }
+    const style = colors[role] || colors.user
+    return (
+      <span
+        style={{
+          background: style.bg,
+          color: style.color,
+          padding: '4px 10px',
+          borderRadius: '12px',
+          fontSize: '12px',
+          fontWeight: 600,
+          textTransform: 'capitalize'
+        }}
+      >
+        {style.label}
+      </span>
+    )
+  }
+
+  // Formatear fecha (backend devuelve created_at en snake_case)
+  const formatDate = (dateStr) => {
+    if (!dateStr) return 'N/A'
+    try {
+      return new Date(dateStr).toLocaleDateString('es-CO', {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric'
+      })
+    } catch {
+      return 'N/A'
+    }
+  }
+
+  if (loading && users.length === 0) {
+    return <div className="loading-container">Cargando usuarios...</div>
+  }
+
+  return (
+    <div className="users-container">
+      <div className="users-header">
+        <h2>Gestión de Usuarios</h2>
+        <button
+          className="btn-primary"
+          onClick={() => {
+            setSelectedUser(null)
+            setEditMode(false)
+            setShowForm(true)
+            setShowDetails(false)
+          }}
+        >
+          + Nuevo Usuario
+        </button>
+      </div>
+
+      {message && (
+        <AlertMessage
+          type={message.type}
+          message={message.text}
+          onClose={() => setMessage(null)}
+        />
+      )}
+
+      <div className="users-search">
+        <input
+          type="text"
+          placeholder="Buscar por nombre, email, rol o ID..."
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+          className="search-input"
+        />
+      </div>
+
+      {error && (
+        <div className="error-message">
+          Error: {error}
+          <button onClick={loadUsers}>Reintentar</button>
+        </div>
+      )}
+
+      <div className="users-table-container">
+        <table className="users-table">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Nombre</th>
+              <th>Email</th>
+              <th>Teléfono</th>
+              <th>Rol</th>
+              <th>Registro</th>
+              <th>Acciones</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filteredUsers.length === 0 ? (
+              <tr>
+                <td colSpan="7" className="no-data">
+                  {searchTerm
+                    ? `No se encontraron usuarios que coincidan con "${searchTerm}"`
+                    : 'No hay usuarios registrados'}
+                </td>
+              </tr>
+            ) : (
+              filteredUsers.map((user) => (
+                <tr key={user.id}>
+                  <td>
+                    <span
+                      style={{
+                        background: '#f3f4f6',
+                        padding: '2px 8px',
+                        borderRadius: '6px',
+                        fontSize: '12px',
+                        fontWeight: 600,
+                        color: '#374151'
+                      }}
+                    >
+                      #{user.id}
+                    </span>
+                  </td>
+                  <td>
+                    <div style={{ fontWeight: 500, color: '#333' }}>
+                      {user.name || user.lastname
+                        ? `${user.name || ''} ${user.lastname || ''}`.trim()
+                        : '—'}
+                    </div>
+                  </td>
+                  <td>{user.email}</td>
+                  <td>{user.phone || '—'}</td>
+                  <td>{getRoleBadge(user.role)}</td>
+                  <td>{formatDate(user.created_at)}</td>
+                  <td className="actions">
+                    <button
+                      className="btn-view"
+                      onClick={() => handleViewDetails(user)}
+                      title="Ver detalles"
+                    >
+                      👁️
+                    </button>
+                    <button
+                      className="btn-edit"
+                      onClick={() => handleEdit(user)}
+                      title="Editar"
+                    >
+                      ✏️
+                    </button>
+                    <button
+                      className="btn-delete"
+                      onClick={() => handleDelete(user)}
+                      title="Eliminar"
+                    >
+                      🗑️
+                    </button>
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {showForm && (
+        <UserForm
+          user={selectedUser}
+          isEdit={editMode}
+          onSuccess={handleFormSuccess}
+          onClose={handleCloseForm}
+        />
+      )}
+
+      {showDetails && selectedUser && (
+        <UserDetails
+          user={selectedUser}
+          onClose={handleCloseDetails}
+          onEdit={() => {
+            handleCloseDetails()
+            handleEdit(selectedUser)
+          }}
+        />
+      )}
+    </div>
+  )
+}
+
+export default UsersView
+```
+
+# 📌 Notas didácticas clave para su clase
+
+1. El bug createdAt vs created_at: este es un excelente caso para discutir. JSON Server (JavaScript puro) usa camelCase, MySQL (base de datos relacional) usa snake_case. El Model debería normalizar los nombres (convertir snake_case a camelCase). Aquí lo solucionamos directo en la Vista, pero la solución arquitectónicamente correcta sería hacerlo en el UserModel. Vale la pena discutirlo con los estudiantes.
+2. Búsqueda ampliada: ahora el estudiante puede buscar por nombre completo. La línea const fullName = \user.name∣∣′′
+3. user.name∣∣′′
+4. {user.lastname || ''}`.toLowerCase()` une ambos campos y busca en el resultado. Es un patrón muy útil.
+5. Badges de rol con colores semánticos: rojo para admin (poder), naranja para seller (comercio), azul para customer (cliente), gris para user (básico). No es solo estético — es semántica visual. Los colores comunican jerarquía.
+6. colSpan="7": cada vez que agregan o quitan columnas a la tabla, deben actualizar el colSpan. Es un bug clásico que los estudiantes cometen: agregan una columna y la fila "no hay datos" queda desalineada.
+7. formatDate con es-CO: usamos la localización colombiana para mostrar fechas (15 ene 2024). Es un detalle profesional de UX. Puede variarlo según el país del salón.
+8. Estado vacío contextual: si el usuario escribió algo en el buscador y no hay resultados, mostramos un mensaje diferente al de "no hay usuarios registrados". Es un detalle de UX que mejora la experiencia.
+
+## 🎨 Sugerencia opcional: estilos en Users.css
+El código anterior usa estilos inline para los badges y las etiquetas. Podría moverlos a Users.css para mantener la separación de responsabilidades (CSS en CSS, JSX en JSX). Si quiere, en un paso extra lo hacemos. Por ahora, inline funciona y es más fácil de leer para los estudiantes en un solo archivo.
+
+## ✅ Antes de continuar
+Por favor:
+1. Reemplace src/views/dashboard/UsersView.jsx con el contenido de arriba.
+2. Recargue la app y vaya al dashboard → tab "Usuarios".
+3. Verifique la nueva tabla:
+  - Debe mostrar 7 columnas: ID | Nombre | Email | Teléfono | Rol | Registro | Acciones.
+  - El ID debe aparecer como un badge gris pequeño (#1, #2).
+  - El rol debe aparecer como badge de color según su tipo.
+  - La fecha de registro ahora SÍ debe aparecer (antes salía "N/A" por el bug createdAt).
+4. Pruebe el buscador:
+  - Escriba parte del nombre → debe filtrar.
+  - Escriba "admin" → debe mostrar solo admins.
+  - Escriba un email parcial → debe filtrar.
+5. Pruebe la interacción completa: ver detalles, editar, eliminar.
+
+### Errores esperados (ninguno debería aparecer, pero por si acaso):
+- Si la fecha sigue mostrando N/A → revise en la consola el objeto user para confirmar el nombre del campo (created_at vs createdAt).
+- Si el rol aparece sin color → verifique que user.role no sea undefined. Si MySQL lo devuelve en otro nombre, ajústelo.
+
+# 🎯 PASO 9: src/views/dashboard/UserDetails.jsx
+
+## ¿Por qué este archivo ahora?
+Este es el modal de detalles que se abre al hacer clic en 👁️. Es el hermano pequeño del UsersView: mientras la tabla muestra un resumen, este modal debe mostrar todos los datos del usuario seleccionado.
+
+## 🔴 Problemas del código actual
+
+### Problema 1: Mismo bug createdAt → created_at
+```jsx
+{user.createdAt ? new Date(user.createdAt).toLocaleString() : 'N/A'}
+{user.updatedAt ? new Date(user.updatedAt).toLocaleString() : 'N/A'}
+```
+Su backend MySQL devuelve `created_at` y `updated_at` en `snake_case`. La vista muestra `N/A` en ambos campos siempre. Es el mismo bug que ya corregimos en UsersView.
+
+### Problema 2: Solo muestra 4 campos, pero el backend devuelve 10
+Su `getAllUsers` y `getUserById` devuelven:
+```text
+id, email, name, lastname, phone, image, role, created_at, updated_at
+```
+Pero el modal actual solo muestra: `id`, `email`, `createdAt`, `updatedAt`. Se pierde información valiosa: nombre, apellido, teléfono, rol.
+
+### Problema 3: No hay distinción visual del rol
+Aquí conviene reutilizar el mismo patrón de badge que usamos en UsersView. Consistencia visual = buena UX.
+
+### Problema 4: Falta el botón "Eliminar" en el modal
+En el flujo actual, el usuario tiene que cerrar el modal y buscar el 🗑️ en la tabla. Es más natural tener el botón de eliminar también en el modal, con la misma confirmación.
+
+## ⚠️ Decisión sobre la imagen (image)
+Su backend devuelve `image`, que puede ser:
+- `null` (usuario sin imagen — caso más común en pruebas)
+- Una URL a imagen (si se sube al backend)
+
+Voy a incluirlo de forma simple: si existe `image`, mostrar `<img src={user.image} />`. Si no, mostrar un avatar generado con iniciales (bonito y didáctico). No complica demasiado y agrega valor visual a la clase.
+
+## 🎯 ¿Qué cambios hago?
+1. Corregir `createdAt`/`updatedAt` → `created_at`/`updated_at`.
+2. Agregar todos los campos: `name`, `lastname`, `phone`, `role`.
+3. Badge de rol con los mismos colores que UsersView (consistencia).
+4. Avatar con iniciales si no hay imagen.
+5. Botón "Eliminar" dentro del modal (además del que está en la tabla).
+6. Formato de fecha con localización `es-CO` y hora completa (más informativo en un modal de detalles).
+
+## 🚨 Sobre el botón "Eliminar" en el modal
+Para que funcione, el componente necesita recibir un callback `onDelete`. Eso implica un cambio pequeño en UsersView (donde se instancia `<UserDetails />`). Lo incluyo aquí y le indico el cambio de una línea para UsersView.
+
+## Archivo completo a reemplazar:
+
+```jsx
+// src/views/dashboard/UserDetails.jsx
+const UserDetails = ({ user, onClose, onEdit, onDelete }) => {
+  if (!user) return null
+
+  // Generar iniciales para el avatar
+  const getInitials = () => {
+    const first = (user.name || '').charAt(0).toUpperCase()
+    const second = (user.lastname || '').charAt(0).toUpperCase()
+    if (first && second) return `${first}${second}`
+    if (first) return first
+    return (user.email || '?').charAt(0).toUpperCase()
+  }
+
+  // Colores por rol (mismos que UsersView para consistencia)
+  const getRoleBadge = (role) => {
+    const colors = {
+      admin: { bg: '#fee2e2', color: '#dc2626', label: 'Administrador' },
+      seller: { bg: '#fed7aa', color: '#ea580c', label: 'Vendedor' },
+      customer: { bg: '#dbeafe', color: '#2563eb', label: 'Cliente' },
+      user: { bg: '#e5e7eb', color: '#6b7280', label: 'Usuario' }
+    }
+    const style = colors[role] || colors.user
+    return (
+      <span
+        style={{
+          background: style.bg,
+          color: style.color,
+          padding: '4px 12px',
+          borderRadius: '12px',
+          fontSize: '12px',
+          fontWeight: 600,
+          display: 'inline-block'
+        }}
+      >
+        {style.label}
+      </span>
+    )
+  }
+
+  // Formatear fecha completa con hora
+  const formatDateTime = (dateStr) => {
+    if (!dateStr) return 'N/A'
+    try {
+      return new Date(dateStr).toLocaleString('es-CO', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+      })
+    } catch {
+      return 'N/A'
+    }
+  }
+
+  const handleDelete = () => {
+    if (window.confirm(`¿Estás seguro de eliminar al usuario ${user.email}?`)) {
+      if (onDelete) onDelete(user)
+    }
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <h3>Detalles del Usuario</h3>
+          <button className="modal-close" onClick={onClose}>×</button>
+        </div>
+
+        {/* Cabecera con avatar */}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '20px',
+            padding: '20px',
+            background: 'linear-gradient(135deg, #667eea15 0%, #764ba215 100%)',
+            borderBottom: '1px solid #e1e5e9'
+          }}
+        >
+          {user.image ? (
+            <img
+              src={user.image}
+              alt={`${user.name} ${user.lastname}`}
+              style={{
+                width: '80px',
+                height: '80px',
+                borderRadius: '50%',
+                objectFit: 'cover',
+                border: '3px solid white',
+                boxShadow: '0 4px 10px rgba(0,0,0,0.1)'
+              }}
+            />
+          ) : (
+            <div
+              style={{
+                width: '80px',
+                height: '80px',
+                borderRadius: '50%',
+                background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                color: 'white',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: '28px',
+                fontWeight: 700,
+                border: '3px solid white',
+                boxShadow: '0 4px 10px rgba(0,0,0,0.1)',
+                flexShrink: 0
+              }}
+            >
+              {getInitials()}
+            </div>
+          )}
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div
+              style={{
+                fontSize: '20px',
+                fontWeight: 600,
+                color: '#333',
+                marginBottom: '5px',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap'
+              }}
+            >
+              {user.name || user.lastname
+                ? `${user.name || ''} ${user.lastname || ''}`.trim()
+                : 'Sin nombre'}
+            </div>
+            <div style={{ color: '#666', fontSize: '14px', marginBottom: '8px' }}>
+              {user.email}
+            </div>
+            {getRoleBadge(user.role)}
+          </div>
+        </div>
+
+        {/* Cuerpo con todos los detalles */}
+        <div className="user-details">
+          <div className="detail-row">
+            <span className="detail-label">ID:</span>
+            <span className="detail-value">
+              <span
+                style={{
+                  background: '#f3f4f6',
+                  padding: '2px 8px',
+                  borderRadius: '6px',
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  color: '#374151'
+                }}
+              >
+                #{user.id}
+              </span>
+            </span>
+          </div>
+
+          <div className="detail-row">
+            <span className="detail-label">Nombre:</span>
+            <span className="detail-value">{user.name || '—'}</span>
+          </div>
+
+          <div className="detail-row">
+            <span className="detail-label">Apellido:</span>
+            <span className="detail-value">{user.lastname || '—'}</span>
+          </div>
+
+          <div className="detail-row">
+            <span className="detail-label">Email:</span>
+            <span className="detail-value">{user.email}</span>
+          </div>
+
+          <div className="detail-row">
+            <span className="detail-label">Teléfono:</span>
+            <span className="detail-value">{user.phone || '—'}</span>
+          </div>
+
+          <div className="detail-row">
+            <span className="detail-label">Rol:</span>
+            <span className="detail-value">{getRoleBadge(user.role)}</span>
+          </div>
+
+          <div className="detail-row">
+            <span className="detail-label">Fecha Registro:</span>
+            <span className="detail-value">{formatDateTime(user.created_at)}</span>
+          </div>
+
+          <div className="detail-row">
+            <span className="detail-label">Última Actualización:</span>
+            <span className="detail-value">{formatDateTime(user.updated_at)}</span>
+          </div>
+        </div>
+
+        {/* Footer con acciones */}
+        <div className="modal-footer">
+          <button
+            className="btn-delete"
+            onClick={handleDelete}
+            title="Eliminar usuario"
+            style={{
+              padding: '10px 16px',
+              borderRadius: '8px',
+              border: 'none',
+              cursor: 'pointer',
+              fontWeight: 500
+            }}
+          >
+            🗑️ Eliminar
+          </button>
+          <div style={{ flex: 1 }} />
+          <button className="btn-secondary" onClick={onClose}>
+            Cerrar
+          </button>
+          <button className="btn-primary" onClick={onEdit}>
+            Editar Usuario
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+export default UserDetails
+```
+
+# 🔧 Cambio complementario en UsersView.jsx
+
+Como agregamos el callback `onDelete` al `UserDetails`, hay que pasarlo desde `UsersView`. Solo modifique el bloque final donde se renderiza `<UserDetails />`:
+
+**Antes:**
+```jsx
+{showDetails && selectedUser && (
+  <UserDetails
+    user={selectedUser}
+    onClose={handleCloseDetails}
+    onEdit={() => {
+      handleCloseDetails()
+      handleEdit(selectedUser)
+    }}
+  />
+)}
+```
+
+**Después:**
+```jsx
+{showDetails && selectedUser && (
+  <UserDetails
+    user={selectedUser}
+    onClose={handleCloseDetails}
+    onEdit={() => {
+      handleCloseDetails()
+      handleEdit(selectedUser)
+    }}
+    onDelete={async (user) => {
+      handleCloseDetails()
+      await handleDelete(user)
+    }}
+  />
+)}
+```
+
+Esto ya está contemplado en el `UsersView` del paso anterior: `handleDelete` existe, solo necesitamos invocarlo desde el modal y cerrar primero.
+
+---
+
+## 📌 Notas didácticas clave para su clase
+
+1. **El bug createdAt vuelve a aparecer:** este es el tercer archivo con el mismo bug. Excelente oportunidad para hablar de código duplicado y deuda técnica. La solución correcta sería:
+   - Crear una capa de normalización en `UserModel` que convierta `snake_case` $\rightarrow$ `camelCase` al recibir datos.
+   - O crear un util compartido `formatDate()` en `src/utils/helpers.js` (que está vacío).
+2. **Pregúntele a sus estudiantes:** ¿qué pasa si mañana el backend cambia `created_at` a `createdAt`? Hay que actualizar todos los archivos donde se usa. Con un util centralizado, solo cambia en un lugar. Esto es el principio DRY aplicado a la vida real.
+3. **Avatar con iniciales:** cuando `user.image` es `null`, generamos iniciales. Es un patrón muy común (Slack, Gmail, GitHub). La lógica: primera letra del nombre + primera del apellido. Si falta alguna, usar la inicial del email. Es un buen ejercicio de lógica condicional.
+4. **`flexShrink: 0` en el avatar:** sin esto, si el nombre es muy largo, el avatar se encoge. Es un detalle sutil de CSS que vale la pena comentar.
+5. **Badge de rol duplicado:** entre `UsersView` y `UserDetails` hay código duplicado en `getRoleBadge()`. Es el momento perfecto para hablar de componentes reutilizables. En un siguiente paso (opcional) podríamos extraer `<RoleBadge role={...} />` como componente compartido.
+6. **Confirmación de eliminación en dos lugares:** ahora el usuario puede eliminar desde la tabla (🗑️) y desde el modal. Ambos usan el mismo `handleDelete` — la lógica no se duplica, solo el disparador. Es un buen ejemplo de separación entre "evento" y "lógica".
+7. **`formatDateTime` vs `toLocaleDateString`:** en el modal usamos formato con hora (`toLocaleString`) porque en una vista de detalles el usuario quiere ver la hora exacta. En la tabla usamos solo fecha (`toLocaleDateString`) porque el espacio es limitado. Contexto determina presentación — otra lección de UX.
+
+---
+
+## 🎯 Bonus didáctico: ¿por qué no normalizamos en el Model?
+
+Sus estudiantes podrían preguntar: *"¿por qué no arreglamos esto de una vez en el UserModel?"*.
+
+La respuesta correcta es: sí, es lo que debería hacerse. Aquí lo hicimos en las vistas para mantener el enfoque paso a paso. En un paso final (o como tarea para los estudiantes), podríamos agregar a `UserModel.getAllUsers`:
+
+```js
+const normalized = response.data.map(u => ({
+  ...u,
+  createdAt: u.created_at,
+  updatedAt: u.updated_at
+}))
+```
+
+Y luego las vistas usarían `user.createdAt` siempre. Esto es un ejercicio excelente para dejar como tarea: pedir a los estudiantes que hagan la normalización en el Model y refactoricen las vistas.
+
+---
+
+## ✅ Antes de continuar
+
+Por favor:
+1. Reemplace `src/views/dashboard/UserDetails.jsx` con el contenido de arriba.
+2. Modifique `UsersView.jsx` para pasar `onDelete` al `<UserDetails />` (ver el bloque "Cambio complementario" arriba).
+3. Recargue la app y vaya al dashboard $\rightarrow$ tab "Usuarios".
+4. Haga clic en 👁️ de cualquier usuario:
+   - Debe aparecer la cabecera con avatar (imagen o iniciales).
+   - Debe mostrar todos los campos: ID, Nombre, Apellido, Email, Teléfono, Rol, Fecha Registro, Última Actualización.
+   - Las fechas ahora SÍ deben aparecer (antes salía "N/A").
+   - El rol debe aparecer como badge de color.
+5. Pruebe el botón "🗑️ Eliminar" del modal:
+   - Debe pedir confirmación.
+   - Debe cerrar el modal.
+   - Debe eliminar de la tabla.
+   - Debe mostrar el mensaje de éxito.
+6. Pruebe el botón "Editar Usuario": debe cerrar el modal de detalles y abrir el modal de edición.
+
+### Errores esperados:
+- Si el avatar no muestra iniciales correctas $\rightarrow$ revise que `user.name` y `user.lastname` no estén vacíos en MySQL.
+- Si el rol aparece sin badge $\rightarrow$ revise que `user.role` esté definido y sea uno de los valores esperados.
+
+🎯 PASO 10: src/views/dashboard/DashboardHeader.jsx
+
+¿Por qué este archivo ahora?
+Este es el encabezado del dashboard que muestra el nombre del usuario logueado y el botón de cerrar sesión. Ya casi todo está bien, pero hay un detalle silencioso que surgió con el backend: el name del usuario puede estar vacío o ausente.
+
+🔴 Problema del código actual
+```jsx
+<div style={{ fontWeight: 600, color: '#333', fontSize: '14px' }}>  {user?.name || user?.email?.split('@')[0] || 'Usuario'}</div>
+```
+Este código asume que si user.name está vacío, se usa la parte del email antes del @. Está bien como fallback, pero hay tres casos reales con el backend que el código actual no maneja bien:
+
+* **Caso 1: user.name es string vacío ""**
+En MySQL, si el usuario fue creado sin nombre, name puede ser "" (string vacío). "" es falsy en JavaScript, así que la lógica || funciona. ✅
+
+* **Caso 2: user.name es null**
+Si el campo name es NULL en MySQL, el backend lo devuelve como null. También es falsy. ✅
+
+* **Caso 3: user.name = " " (espacio en blanco)**
+Si el usuario, por error, guardó un nombre con solo espacios, " " es truthy en JavaScript. La lógica actual lo aceptaría y mostraría espacios vacíos. ❌
+
+Además, hay un problema visual: no muestra el rol del usuario (admin, seller, etc.), información que ahora sí está disponible.
+
+🎯 ¿Qué cambios hago?
+1. Limpieza de strings vacíos: usar .trim() para detectar nombres con solo espacios.
+2. Mostrar el rol con badge pequeño: igual que en la tabla de usuarios, para consistencia visual.
+3. Nombre completo: si tiene name y lastname, mostrarlos juntos ("Oliver Stone").
+4. Mejor estructura interna con un helper para el nombre a mostrar.
+5. Mantener los estilos inline (así está el archivo actual), pero limpiar un poco.
+
+⚠️ Sobre useAuth y el objeto user
+Mire su useAuth actual:
+```js
+const [currentUser, setCurrentUser] = useState(null)// ...const checkAuth = async () => {  const authState = AuthController.getAuthState()  setCurrentUser(authState.currentUser)  // viene de localStorage}
+```
+El currentUser viene del localStorage (donde guardamos el usuario en el login con storageService.setUser(user)). En el AuthModel.login guardamos:
+```js
+storageService.setUser({  id: userData.id,  email: userData.email,  name: userData.name,  lastname: userData.lastname,  role: userData.role,  image: userData.image,  phone: userData.phone})
+```
+Así que sí llegan name, lastname y role. El DashboardHeader solo necesita aprovecharlos mejor.
+
+## Archivo completo a reemplazar:
+
+```jsx
+// src/views/dashboard/DashboardHeader.jsx
+const DashboardHeader = ({ user, onLogout, activeTab, onTabChange }) => {
+  // Construye el nombre a mostrar con fallbacks robustos
+  const getDisplayName = () => {
+    const name = (user?.name || '').trim()
+    const lastname = (user?.lastname || '').trim()
+
+    if (name && lastname) return `${name} ${lastname}`
+    if (name) return name
+    if (lastname) return lastname
+
+    // Fallback: parte del email antes del @
+    const email = user?.email || ''
+    if (email.includes('@')) return email.split('@')[0]
+
+    return 'Usuario'
+  }
+
+  // Badge de rol (mismo esquema que UsersView y UserDetails)
+  const getRoleBadge = (role) => {
+    const colors = {
+      admin: { bg: '#fee2e2', color: '#dc2626', label: 'Admin' },
+      seller: { bg: '#fed7aa', color: '#ea580c', label: 'Seller' },
+      customer: { bg: '#dbeafe', color: '#2563eb', label: 'Customer' },
+      user: { bg: '#e5e7eb', color: '#6b7280', label: 'User' }
+    }
+    const style = colors[role] || colors.user
+    return (
+      <span
+        style={{
+          background: style.bg,
+          color: style.color,
+          padding: '2px 8px',
+          borderRadius: '10px',
+          fontSize: '11px',
+          fontWeight: 600,
+          textTransform: 'capitalize',
+          display: 'inline-block',
+          marginTop: '2px'
+        }}
+      >
+        {style.label}
+      </span>
+    )
+  }
+
+  // ============ Estilos ============
+  const headerStyles = {
+    background: 'white',
+    boxShadow: '0 2px 10px rgba(0,0,0,0.1)',
+    padding: '0 30px',
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    position: 'sticky',
+    top: 0,
+    zIndex: 100,
+    flexWrap: 'wrap',
+    gap: '15px'
+  }
+
+  const headerLeftStyles = {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '15px',
+    padding: '15px 0'
+  }
+
+  const headerRightStyles = {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '20px'
+  }
+
+  const badgeStyles = {
+    background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+    color: 'white',
+    padding: '4px 12px',
+    borderRadius: '20px',
+    fontSize: '12px',
+    fontWeight: 600
+  }
+
+  const tabStyles = {
+    display: 'flex',
+    gap: '5px',
+    background: '#f0f0f0',
+    padding: '4px',
+    borderRadius: '12px'
+  }
+
+  const tabBtnStyles = (isActive) => ({
+    padding: '8px 20px',
+    border: 'none',
+    background: isActive
+      ? 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)'
+      : 'transparent',
+    cursor: 'pointer',
+    fontSize: '14px',
+    fontWeight: 500,
+    borderRadius: '8px',
+    transition: 'all 0.3s ease',
+    color: isActive ? 'white' : '#666'
+  })
+
+  const logoutBtnStyles = {
+    background: '#ef4444',
+    color: 'white',
+    border: 'none',
+    padding: '8px 16px',
+    borderRadius: '8px',
+    cursor: 'pointer',
+    fontSize: '14px',
+    fontWeight: 500
+  }
+
+  return (
+    <header style={headerStyles}>
+      <div style={headerLeftStyles}>
+        <h1 style={{ fontSize: '20px', color: '#333', margin: 0 }}>
+          Sistema de Información Web
+        </h1>
+        <span style={badgeStyles}>Admin Panel</span>
+      </div>
+
+      <div style={tabStyles}>
+        <button
+          style={tabBtnStyles(activeTab === 'dashboard')}
+          onClick={() => onTabChange('dashboard')}
+        >
+          Dashboard
+        </button>
+        <button
+          style={tabBtnStyles(activeTab === 'users')}
+          onClick={() => onTabChange('users')}
+        >
+          Usuarios
+        </button>
+      </div>
+
+      <div style={headerRightStyles}>
+        <div style={{ textAlign: 'right' }}>
+          <div
+            style={{
+              fontWeight: 600,
+              color: '#333',
+              fontSize: '14px',
+              lineHeight: 1.2
+            }}
+          >
+            {getDisplayName()}
+          </div>
+          <div
+            style={{
+              fontSize: '12px',
+              color: '#666',
+              marginBottom: '2px'
+            }}
+          >
+            {user?.email}
+          </div>
+          {user?.role && getRoleBadge(user.role)}
+        </div>
+        <button onClick={onLogout} style={logoutBtnStyles}>
+          Cerrar Sesión
+        </button>
+      </div>
+    </header>
+  )
+}
+
+export default DashboardHeader
+```
+
+# 📌 Notas didácticas clave para su clase
+
+1. El bug del string vacío: `' '` (espacio) es `truthy` en JavaScript, mientras que `''` y `null` son `falsy`. Este es un error muy común entre estudiantes. El `.trim()` antes de la comparación lo resuelve. Enseñe a sus estudiantes a **SIEMPRE** hacer `.trim()` cuando comparan strings que vienen del usuario o de una API.
+2. Construcción del nombre completo: en lugar de solo `user.name`, construimos "Nombre Apellido" cuando ambos existen. Es un pequeño detalle de UX que mejora mucho la experiencia. La función `getDisplayName()` encapsula toda esa lógica — una sola responsabilidad.
+3. Badge de rol en el header: por tercera vez usamos `getRoleBadge()`. Ahora sí es el momento de hablar de refactorización:
+4. "Hemos escrito esta función 3 veces. ¿Cómo podríamos evitar esa duplicación?"
+5. Respuesta: crear un componente `src/views/common/RoleBadge.jsx` y reutilizarlo. Lo dejamos como tarea para los estudiantes — es un ejercicio perfecto de refactorización DRY.
+6. `marginTop: '2px'` en el badge: pequeña decisión de diseño. Cuando un badge va debajo de un nombre, necesita un poco de espacio para respirar. Pequeños detalles así hacen la diferencia entre "se ve apretado" y "se ve profesional".
+7. `lineHeight: 1.2` en el nombre: cuando el nombre tiene acentos (ej. "José Rodríguez") y se muestra con `fontWeight: 600`, la línea puede "respirar" de más. `lineHeight: 1.2` lo compacta. Detalle didáctico de CSS.
+8. Fallback chain robusto:
+9. `text`
+10. `name + lastname` → `name` → `lastname` → parte del email → `'Usuario'`
+11. Es una cadena de fallbacks ordenada de lo más específico a lo más genérico. Es un patrón que sus estudiantes deben dominar.
+
+## 🎨 Sugerencia didáctica para profundizar
+Aproveche este paso para introducir el concepto de null safety con optional chaining (`user?.name`). Su código ya lo usa, pero vale la pena explicar:
+- `user?.name` → devuelve `undefined` si `user` es `null`/`undefined` en lugar de lanzar error.
+- Encadenarlo con `||` da un fallback elegante.
+- Sin `?.`, si `user` fuera null, toda la app explotaría. Optional chaining = defensive programming.
+
+## 🚨 ¿Y el DashboardView?
+Su `DashboardView.jsx` también muestra el nombre del usuario en el mensaje de bienvenida:
+```jsx
+<h2>Bienvenido, {currentUser?.name || currentUser?.email?.split('@')[0] || 'Usuario'}!</h2>
+```
+Este código tiene el mismo problema del `.trim()` (aunque en menor grado). Si quiere, puede hacer un ajuste similar. Pero como ya tiene el `DashboardHeader` funcionando bien, tal vez no sea crítico. Si le sobra tiempo, lo revisamos como paso opcional.
+
+## ✅ Antes de continuar
+Por favor:
+1. Reemplace `src/views/dashboard/DashboardHeader.jsx` con el contenido de arriba.
+2. Recargue la app con una sesión activa (haga login).
+3. Verifique el header del dashboard:
+  - Debe mostrar el nombre completo del usuario ("Oliver Stone").
+  - Debe mostrar el email debajo del nombre.
+  - Debe mostrar el badge de rol (Admin, Seller, Customer o User).
+  - El botón "Cerrar Sesión" debe seguir funcionando.
+4. Pruebe el caso borde (opcional, avanzado):
+  - En DevTools → Application → Local Storage → `user_data`, edite el JSON y deje `"name": ""` y `"lastname": ""` → recargue → debería mostrar la parte del email antes del `@`.
+  - Ahora ponga `"name": " "` (solo espacios) → recargue → debería ignorar los espacios y mostrar el fallback del email. Aquí se ve el `.trim()` en acción.
+
+**Errores esperados (ninguno):**
+- Si el nombre completo no se muestra, revise en consola `JSON.parse(localStorage.getItem('user_data'))` para confirmar los campos.
+
+# 🎯 PASO 11: src/hooks/useAuth.js
+
+## ¿Por qué este archivo ahora?
+Este Hook es el punto central de toda la autenticación en el frontend. Todas las vistas (LoginView, RegisterView, Navbar, DashboardView) dependen de él. Ya que modificamos AuthModel, jwtService y AuthController, este es el momento de alinear el Hook con la nueva arquitectura.
+
+## 🔴 Problemas del código actual
+
+### Problema 1: No hay auto-logout cuando el token expira
+El token JWT del backend expira en 1 hora (recuerde: `exp: Math.floor(Date.now() / 1000) + (60 * 60)` en `userController.js`). Pero el Hook no verifica la expiración periódicamente. Resultado: el usuario sigue "logueado" hasta que hace una petición y el backend responde 401. UX pobre.
+
+### Problema 2: El listener de storage solo escucha `auth_token`
+```js
+const handleStorageChange = (e) => {  
+  if (e.key === 'auth_token') {    
+    checkAuth()  
+  }
+}
+```
+Esto está bien, pero si el `user_data` cambia (por ejemplo, otro tab actualiza el perfil), no se refleja. Menor, pero mejorable.
+
+### Problema 3: El logout no limpia el estado si falla la red
+```js
+const logout = async () => {  
+  return new Promise((resolve, reject) => {    
+    AuthController.handleLogout(      
+      () => { /* limpia estado */ },      
+      (error) => { reject({ success: false, error }) }    
+    )  
+  })
+}
+```
+Como `AuthModel.logout` solo limpia localStorage (no hace petición al backend), no puede fallar. Pero el `reject` deja el estado inconsistente: el localStorage está limpio pero `isAuthenticated` sigue en true. Bug potencial.
+
+### Problema 4: No se expone `hasRole()` ni `getRole()`
+Con el backend real, el role del usuario es clave (admin/seller/customer/user). Las vistas necesitan saberlo. Falta un helper.
+
+### Problema 5: `checkAuth` no espera a `jwtService` (aunque es sincrónico, conceptualmente debería ser más explícito)
+
+---
+
+## 🎯 ¿Qué cambios hago?
+1. **Auto-logout por expiración:** un `setInterval` que verifica cada minuto si el token expiró y, si es así, cierra sesión automáticamente.
+2. **Logout más robusto:** limpiar el estado siempre, incluso si algo falla.
+3. **Exponer `hasRole(role)` y `getRole()`:** helpers para que las vistas validen permisos.
+4. **Escuchar también `user_data`:** para reflejar cambios de perfil entre tabs.
+5. **Añadir `refreshAuth()`** como alias explícito de `checkAuth()` (útil en vistas).
+6. **Documentar bien** los métodos expuestos.
+
+## ⚠️ Sobre el setInterval y React StrictMode
+En modo desarrollo con React 18+ y StrictMode, los efectos se ejecutan dos veces (a propósito, para detectar bugs). El `useEffect` de auto-logout debe limpiar correctamente el `setInterval` en el `return` para evitar timers duplicados. Su `main.jsx` tiene `<React.StrictMode>` envolviendo la app, así que esto es relevante.
+
+**Archivo completo a reemplazar:**
+
+```js
+// src/hooks/useAuth.js
+import { useState, useEffect, useCallback } from 'react'
+import AuthController from '../controllers/AuthController'
+import jwtService from '../services/jwtService'
+
+const useAuth = () => {
+  const [isAuthenticated, setIsAuthenticated] = useState(false)
+  const [currentUser, setCurrentUser] = useState(null)
+  const [token, setToken] = useState(null)
+  const [loading, setLoading] = useState(true)
+
+  // Sincroniza el estado interno con el storage y verifica expiración del JWT
+  const checkAuth = useCallback(async () => {
+    setLoading(true)
+    const authState = AuthController.getAuthState()
+
+    setIsAuthenticated(authState.isAuthenticated)
+    setCurrentUser(authState.currentUser)
+    setToken(authState.currentToken)
+
+    setLoading(false)
+    return authState.isAuthenticated
+  }, [])
+
+  // Alias explícito: útil para llamar desde vistas
+  const refreshAuth = useCallback(() => checkAuth(), [checkAuth])
+
+  // Efecto inicial + escucha cambios en storage + auto-logout por expiración
+  useEffect(() => {
+    checkAuth()
+
+    // 1. Escuchar cambios entre pestañas (login/logout en otro tab)
+    const handleStorageChange = (e) => {
+      if (e.key === 'auth_token' || e.key === 'user_data') {
+        checkAuth()
+      }
+    }
+    window.addEventListener('storage', handleStorageChange)
+
+    // 2. Auto-logout cuando el JWT expire
+    const interval = setInterval(() => {
+      const currentToken = localStorage.getItem('auth_token')
+      if (!currentToken) return
+
+      const isValid = jwtService.verifyToken(currentToken)
+      if (!isValid) {
+        console.warn('⏰ Token expirado — cerrando sesión automáticamente')
+        // Logout silencioso
+        AuthController.handleLogout(
+          () => {
+            setIsAuthenticated(false)
+            setCurrentUser(null)
+            setToken(null)
+            // Pequeña señal para que la UI redirija (opcional)
+            window.dispatchEvent(new Event('auth:expired'))
+          },
+          () => {
+            // Aunque falle, limpiamos estado local igual
+            setIsAuthenticated(false)
+            setCurrentUser(null)
+            setToken(null)
+          }
+        )
+      }
+    }, 60 * 1000) // cada minuto
+
+    return () => {
+      window.removeEventListener('storage', handleStorageChange)
+      clearInterval(interval)
+    }
+  }, [checkAuth])
+
+  // LOGIN
+  const login = async (credentials) => {
+    return new Promise((resolve, reject) => {
+      AuthController.handleLogin(
+        credentials,
+        (user, authToken) => {
+          setIsAuthenticated(true)
+          setCurrentUser(user)
+          setToken(authToken)
+          resolve({ success: true, user, token: authToken })
+        },
+        (error) => {
+          reject({ success: false, error })
+        }
+      )
+    })
+  }
+
+  // REGISTER
+  const register = async (userData) => {
+    return new Promise((resolve, reject) => {
+      AuthController.handleRegister(
+        userData,
+        (user) => {
+          resolve({ success: true, user })
+        },
+        (error) => {
+          reject({ success: false, error })
+        }
+      )
+    })
+  }
+
+  // LOGOUT (robusto: siempre limpia el estado)
+  const logout = async () => {
+    return new Promise((resolve) => {
+      AuthController.handleLogout(
+        () => {
+          setIsAuthenticated(false)
+          setCurrentUser(null)
+          setToken(null)
+          resolve({ success: true })
+        },
+        (error) => {
+          // Aunque el Model falle, limpiamos estado local
+          console.warn('Logout con error, limpiando estado local:', error)
+          setIsAuthenticated(false)
+          setCurrentUser(null)
+          setToken(null)
+          resolve({ success: true, warning: error })
+        }
+      )
+    })
+  }
+
+  // HELPERS DE ROL
+  const getRole = () => currentUser?.role || null
+
+  const hasRole = (role) => {
+    if (!role) return false
+    if (Array.isArray(role)) {
+      return role.includes(currentUser?.role)
+    }
+    return currentUser?.role === role
+  }
+
+  return {
+    // Estado
+    isAuthenticated,
+    currentUser,
+    token,
+    loading,
+
+    // Acciones
+    login,
+    register,
+    logout,
+    checkAuth,
+    refreshAuth,
+
+    // Helpers de autorización
+    getRole,
+    hasRole
+  }
+}
+
+export default useAuth
+```
+
+# 📌 Notas didácticas clave para su clase
+
+1. **useCallback para checkAuth**: al envolverlo en `useCallback`, garantizamos que la referencia de la función no cambie entre renders, evitando re-ejecuciones infinitas del `useEffect`. Es un patrón fundamental cuando una función se usa como dependencia de un efecto.
+2. **Auto-logout con setInterval**: cada minuto revisa el token. Si expiró, hace logout silencioso. Este es un patrón de UX proactiva — mejor cerrar sesión antes de que el usuario haga una petición y reciba un 401 inesperado.
+3. **clearInterval en el cleanup**: sin esto, cada render crearía un nuevo intervalo, produciendo memory leaks y logout repetidos. React StrictMode en desarrollo ejecuta el efecto dos veces, así que el cleanup es crítico. Este es el error #1 de los estudiantes con `setInterval` en React.
+4. **Logout robusto con resolve en ambos casos**: al inicio rechazábamos en caso de error. Ahora siempre resolvemos porque el logout local es lo único que importa (el backend no tiene endpoint de logout). Si quisiéramos invalidar tokens en el servidor, esto cambiaría.
+5. **Helpers `getRole()` y `hasRole()`**: estas funciones son la base de la autorización en el cliente. Ejemplo de uso:
+
+```jsx
+const { hasRole } = useAuth()
+// Mostrar el botón de eliminar solo para admins
+{hasRole('admin') && <button onClick={handleDelete}>Eliminar</button>}
+```
+
+⚠️ **Advertencia importante para sus estudiantes**: `hasRole()` en el cliente es solo UX. Un usuario malicioso puede editar `localStorage` y hacerse pasar por admin en el cliente, pero el backend siempre valida el token y el rol reales. Este es un principio fundamental de seguridad: la autorización real vive en el servidor.
+
+6. **`hasRole` acepta array o string**: esto permite llamadas versátiles:
+
+```js
+hasRole('admin')              // true si es admin
+hasRole(['admin', 'seller'])  // true si es admin O seller
+```
+
+7. **Detalle de API design**.
+8. **Evento `auth:expired`**: cuando el token expira, disparamos un evento global. Cualquier componente puede escucharlo y reaccionar (por ejemplo, mostrar un mensaje de "Sesión expirada"). Es un patrón de comunicación desacoplada entre componentes. No lo usamos aún, pero está listo para un paso opcional posterior.
+9. **Escuchar `user_data` además de `auth_token`**: si el usuario actualiza su nombre en otro tab, este hook se enterará. Mejora la sincronización.
+
+---
+
+## 🚨 ¿Qué pasa ahora cuando el token expira?
+
+**Antes** (con el bug del `exp` en milisegundos vs segundos):
+- El token generado con `btoa` nunca expiraba realmente.
+- `isAuthenticated` siempre devolvía `true`.
+
+**Ahora**:
+1. Al hacer login, el backend genera un JWT con `exp` en segundos (+1 hora).
+2. Cada minuto, el `useAuth` verifica con `jwtService.verifyToken(token)`.
+3. Cuando expira, se dispara logout silencioso y `isAuthenticated = false`.
+4. El `ProtectedRoute` en `App.jsx` detecta `isAuthenticated = false` y redirige a `/login`.
+
+### Prueba sugerida para sus estudiantes:
+- Reduzca el `exp` en el backend a `60 * 1` (1 minuto) para probar rápido.
+- Haga login y espere 1 minuto.
+- En la consola, verá `⏰ Token expirado — cerrando sesión automáticamente`.
+- La app debería redirigir a `/login` en la siguiente navegación.
+
+---
+
+## 🔧 Ajuste opcional en `DashboardView`
+
+Si quiere reaccionar al evento `auth:expired` para mostrar un mensaje bonito:
+
+```jsx
+// En DashboardView.jsx, agregue este useEffect:
+useEffect(() => {  
+  const handleExpired = () => {    
+    setLogoutMessage('Tu sesión ha expirado. Por favor, inicia sesión nuevamente.')    
+    setTimeout(() => navigate('/login'), 2000)  
+  }  
+  window.addEventListener('auth:expired', handleExpired)  
+  return () => window.removeEventListener('auth:expired', handleExpired)
+}, [navigate])
+```
+
+Esto es opcional — no es necesario para que la migración funcione. Pero es un detalle de UX pulido que puede mostrar en clase.
+
+---
+
+## ✅ Antes de continuar
+
+Por favor:
+1. Reemplace `src/hooks/useAuth.js` con el contenido de arriba.
+2. Recargue la app y haga login normalmente.
+3. Verifique que todo lo anterior siga funcionando:
+   - Login → redirige a dashboard ✅
+   - Navbar muestra el nombre del usuario ✅
+   - Dashboard muestra el header con rol ✅
+   - Tab "Usuarios" funciona con el CRUD ✅
+   - Logout cierra sesión y redirige a login ✅
+4. Prueba especial de auto-logout (opcional pero muy didáctica):
+   - En el backend `backend/nodejs_express/controllers/userController.js`, cambie temporalmente:
+   
+   ```js
+   exp: Math.floor(Date.now() / 1000) + (60 * 1)  // 1 minuto
+   ```
+   
+   - Reinicie el backend (`npm run dev`).
+   - Haga login.
+   - Espere 1 minuto viendo la consola del navegador.
+   - Debería ver: `⏰ Token expirado — cerrando sesión automáticamente`.
+   - Al hacer clic en cualquier opción del menú, debería redirigir a `/login`.
+5. No olvide revertir el cambio a `60 * 60` (1 hora) después de la prueba.
+
+### Errores esperados:
+- Si el auto-logout no se dispara, revise que `jwtService.verifyToken` esté leyendo correctamente `exp` en segundos (PASO 2).
+- Si hay timers múltiples, revise el `clearInterval` en el `return` del `useEffect`.
+
+---
+
+## 🎉 Resumen de la migración completada
+
+| Paso | Archivo | Cambio principal |
+| :--- | :--- | :--- |
+| 1 | `config/api.js` | BASE_URL + endpoints del backend Express |
+| 2 | `services/jwtService.js` | Solo decodificar, no firmar; Base64URL + exp en segundos |
+| 3 | `services/httpService.js` | Manejo de respuesta `{success, message, data}` |
+| 4 | `models/AuthModel.js` | Login con POST real, sin trampas; extraer token de `session_token` |
+| 5 | `controllers/AuthController.js` | Validaciones más limpias; priorizar mensajes del backend |
+| 6 | `models/UserModel.js` | CRUD completo con endpoints reales |
+| 7 | `views/dashboard/UserForm.jsx` | Campos name/lastname/phone; corregir PATCH; validaciones |
+| 8 | `views/dashboard/UsersView.jsx` | Tabla con más columnas; badges de rol; fix `created_at` |
+| 9 | `views/dashboard/UserDetails.jsx` | Modal completo con avatar; fix `created_at`; botón eliminar |
+| 10 | `views/dashboard/DashboardHeader.jsx` | Nombre completo + badge de rol en el header |
+| 11 | `hooks/useAuth.js` | Auto-logout por expiración; helpers `hasRole()` y `getRole()` |
+
+---
+
+## 📝 Pasos opcionales que puede hacer después (tareas sugeridas para los estudiantes)
+
+1. Extraer `RoleBadge` como componente reutilizable (`src/views/common/RoleBadge.jsx`) — el código está duplicado en 3 archivos.
+2. Normalizar `snake_case` → `camelCase` en `UserModel` para eliminar el problema `created_at` vs `createdAt`.
+3. Reaccionar al evento `auth:expired` en `DashboardView` para mostrar un mensaje de sesión expirada.
+4. Añadir validación de email duplicado en el backend (retornar 409 si el email ya existe).
+5. Migrar a `fetch` con `AbortController` para implementar el `TIMEOUT: 10000` que está declarado en `api.js` pero no se usa.
+6. Proteger rutas por rol en el frontend: por ejemplo, que solo `admin` vea el tab "Usuarios".
+7. Implementar refresh token: el backend actual no lo tiene, pero es una extensión natural.
