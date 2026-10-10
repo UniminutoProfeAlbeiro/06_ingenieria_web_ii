@@ -1,4 +1,4 @@
-🎯 PASO 1: src/config/api.js
+### 🎯 PASO 1: src/config/api.js
 
 Este es el archivo más profundo que define cómo se comunican todas las capas superiores con el backend. Es la base de todo. Cambiamos:
 - La BASE_URL para apuntar al backend Express (con /api como prefijo de las rutas)
